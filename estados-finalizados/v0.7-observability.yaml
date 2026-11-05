@@ -1,0 +1,50 @@
+# v0.7-observability.yaml — Sección s9 (OPCIONAL) · el stack OTel del curso, intacto
+# =================================================================================
+# NO sustituye al docker-compose.yml: se AÑADE como overlay (merge de Compose).
+# Levanta Prometheus/Loki/Tempo/Grafana/OTel-Collector con los pins del curso
+# OpenTelemetry sin tocar, y le cuenta al `api` cinco env vars + un comando
+# instrumentado. El scrape de /metrics de la API lo hace Prometheus vía el job
+# 'vuelo-retraso-api' de observability/prometheus.yaml.
+#
+#   docker compose -f docker-compose.yml -f estados-finalizados/v0.7-observability.yaml up -d --build
+#
+# Puertos que se abren: 3000 (Grafana, Admin anónimo), 9090 (Prometheus),
+# 3100 (Loki), 3200 (Tempo), 4317/4318 (OTLP), 8888/8889 (colector).
+# Si contenedores con esos nombres ya existen (curso OTel en la misma máquina),
+# baja el otro stack antes: los container_name son únicos.
+include:
+  # Ojo con la ruta: Compose resuelve `include` RELATIVO AL DIRECTORIO DEL
+  # PROYECTO (el del -f principal, aquí pipeline/), no relativo a este
+  # fichero. Por eso es ./observability/... y no ../observability/...
+  # (Las bind mounts internas del fichero incluido sí se resuelven contra
+  # su propio directorio: observability/*.yaml. Comprobado con `config`.)
+  - ./observability/compose.observability.yaml
+
+services:
+  api:
+    networks:
+      - app
+      - observability      # para que Prometheus la alcance y ella hable al colector
+    environment:
+      OTEL_SERVICE_NAME: vuelo-retraso-api
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+      # Tercera env var "del curso", aplicada en casa: el 4318 habla OTLP/HTTP,
+      # y el default de la librería es gRPC (4317). Sin declararlo, el pipeline
+      # de trazas no arranca (y el exporter proto-http va en requirements.txt).
+      OTEL_EXPORTER_OTLP_PROTOCOL: http/protobuf
+      # Logs estándar (logging.info de uvicorn/api) -> OTLP -> Loki. La de
+      # arriba habilita el instrumentor de logging; la de abajo, el exporter.
+      OTEL_PYTHON_LOGGING_AUTO_INSTRUMENTATION_ENABLED: "true"
+      OTEL_LOGS_EXPORTER: otlp
+      # Nombre de servicio y dónde escupir OTLP: todo lo demás lo decide el colector.
+    command: ["opentelemetry-instrument", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+    # Auto-instrumentación de FastAPI SIN tocar el código (lab 2 del curso):
+    # trazas por petición + contexto correlacionado. Los RED metrics ya salen
+    # por /metrics (prometheus-fastapi-instrumentator) y los recoge Prometheus.
+
+networks:
+  app:
+    name: mlops-app
+  observability:
+    name: mlops-observability
+    driver: bridge

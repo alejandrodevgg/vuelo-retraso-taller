@@ -1,0 +1,15 @@
+# No viaja al contexto de build de las imágenes
+.git
+.env
+.venv
+__pycache__
+*.pyc
+notebooks/
+estados-finalizados/
+!estados-finalizados/prefect/
+observability/
+data/work/
+data/raw/house_data_drift.csv
+README.md
+mlruns/
+mlflow.db

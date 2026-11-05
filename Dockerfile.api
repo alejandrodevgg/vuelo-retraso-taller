@@ -1,0 +1,31 @@
+# Dockerfile.api — FastAPI inference service
+FROM python:3.11-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1
+
+WORKDIR /app
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# The API imports its modules flat (main.py does `from schemas import ...`),
+# like the book — so /app/src/api goes on PYTHONPATH. But the LOGGED MODEL
+# carries custom classes (src.features.engineer.GroupCategories and the
+# ProbaPredictor in src.models.train_model): unpickling the artifact imports
+# them, so the WHOLE src/ tree must ship in the image and /app must be on the
+# path too. Copying only src/api was fine while the model was all-stock-sklearn
+# (house regression); with a custom transformer it dies at load. Gotcha paid
+# and documented 2026-11-02.
+COPY src ./src
+ENV PYTHONPATH=/app:/app/src/api
+
+# CI bakes models/trained/*.pkl here for the smoke test (pkl mode).
+# In compose the named volume mounts over /app/models instead.
+COPY models ./models
+
+WORKDIR /app/src/api
+EXPOSE 8000
+
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]

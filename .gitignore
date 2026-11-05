@@ -1,0 +1,20 @@
+# Secretos y estado local: nunca al repo
+.env
+__pycache__/
+*.pyc
+.venv/
+
+# Salidas de los jobs (viven en volúmenes docker, pero si alguien los genera
+# en el host, que no se commiteen)
+data/work/
+models/trained/*.pkl
+*.mlflow
+mlruns/
+mlflow.db
+
+# Muestra grande de vuelos (se regenera con scripts/make_flights_sample.py;
+# house_data*.csv sí van versionados)
+data/raw/flights.csv
+
+# Evidently
+estados-finalizados/evidently/report_*.html

@@ -1,0 +1,111 @@
+# compose-v0.5.yaml — Sección s6 · + API sirviendo models:/vuelo-retraso@Production
+# ===============================================================================
+# Delta sobre v0.4: el servicio `api`. Carga el modelo desde el REGISTRY vía
+# mlflow.pyfunc (INFERENCE_MODULE=inference_registry), no desde un .pkl local.
+# Contraste L0 (el del libro) en vivo:
+#   INFERENCE_MODULE=inference docker compose up -d --force-recreate api
+# En ambos modos el /health dice QUÉ backend está respondiendo. 8000:8000, red 'app'.
+name: mlops-pipeline
+
+x-job-build: &job-build
+  context: .
+  dockerfile: Dockerfile.job
+
+services:
+  mlflow:
+    # Pin con "v" delante: ghcr no tiene el tag "3.17.2" pelado (404).
+    image: ghcr.io/mlflow/mlflow:v3.17.2
+    container_name: mlflow
+    command: >
+      mlflow server
+      --host 0.0.0.0
+      --port 5000
+      --backend-store-uri sqlite:////mlflow-data/mlflow.db
+      --artifacts-destination /mlflow-data/mlartifacts
+      --serve-artifacts
+    # MLflow 3: --serve-artifacts es el default; se explicita por docencia.
+    # Nada de /tmp/mlruns: sqlite Y artefactos viven en un volumen nombrado.
+    environment:
+      # MLflow 3.5+ valida la cabecera Host (protección anti DNS-rebinding):
+      # sin esto, los clientes DENTRO de la red docker (host 'mlflow:5000')
+      # reciben 403 "Invalid Host header". Aquí se declaran los hosts legítimos
+      # de esta red: el nombre del servicio, localhost para la UI del navegador
+      # y los rangos IP privados que usa docker por debajo.
+      MLFLOW_SERVER_ALLOWED_HOSTS: "localhost:*,127.0.0.1:*,mlflow,mlflow:*,0.0.0.0:*,10.*,172.*,192.168.*"
+    volumes:
+      - mlflow-data:/mlflow-data
+    ports:
+      - "5555:5000"            # UI y REST: http://localhost:5555
+    networks:
+      - app
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:5000/health', timeout=3).status == 200 else 1)\""]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  datos:
+    # Job de un solo dispar: docker compose run --rm datos
+    # (RAW_FILE=data/raw/house_data.csv para ver la banda de volumen fallar, s3:
+    #  el mundo casa — 84 filas, 7 columnas — muere en la banda y el contract lo
+    #  remataría; los house_data*.csv viven aquí como demo negativa, no como default)
+    build: *job-build
+    profiles: ["jobs"]
+    environment:
+      RAW_FILE: ${RAW_FILE:-data/raw/flights.csv}
+    volumes:
+      - ./data/raw:/app/data/raw:ro      # los crudos entran de solo lectura
+      - pipeline-data:/app/data/work     # salidas: volumen compartido con entrena/api
+      - pipeline-data:/app/models
+    networks:
+      - app
+
+  entrena:
+    # docker compose run --rm entrena                -> loguea runs (s4)
+    # docker compose run --rm entrena python -m src.models.train_model --register
+    #   ... y le puedes añadir --alias Production (s5, registro+promoción a la vez)
+    build: *job-build
+    profiles: ["jobs"]
+    command: ["python", "-m", "src.models.train_model"]
+    environment:
+      MLFLOW_TRACKING_URI: ${MLFLOW_TRACKING_URI:-http://mlflow:5000}
+    volumes:
+      - pipeline-data:/app/data/work
+      - pipeline-data:/app/models
+    networks:
+      - app
+    depends_on:
+      mlflow:
+        condition: service_healthy
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    container_name: vuelo-retraso-api
+    environment:
+      # registry mode por defecto en el estado final; el starter pkl-mode vive en
+      # INFERENCE_MODULE=inference (ver sección 6 y el contraste L0 vs L1).
+      INFERENCE_MODULE: ${INFERENCE_MODULE:-inference_registry}
+      MLFLOW_TRACKING_URI: ${MLFLOW_TRACKING_URI:-http://mlflow:5000}
+      MODEL_NAME: ${MODEL_NAME:-vuelo-retraso}
+      MODEL_ALIAS: ${MODEL_ALIAS:-Production}
+    volumes:
+      - pipeline-data:/app/models        # pkl-mode lee de aquí; registry-mode no lo toca
+    ports:
+      - "${API_PORT:-8000}:8000"   # si tu 8000 está ocupado: API_PORT=18000 en .env
+    networks:
+      - app
+    depends_on:
+      mlflow:
+        condition: service_healthy
+
+volumes:
+  mlflow-data:
+  pipeline-data:
+
+networks:
+  app:
+    name: mlops-app
+    driver: bridge

@@ -1,0 +1,25 @@
+# Dockerfile.prefect — imagen del stretch (solo si llegáis a Prefect)
+FROM python:3.11-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1
+
+WORKDIR /app
+COPY requirements.txt .
+# NO bajar este pin a 3.6.29 "por paridad" con el taller mlops-prefect:
+# medido 2026-11-02, el modo EPHEMERAL de prefect 3.6.29 importa
+# prefect.server y revienta contra el fastapi==0.162.0 del requirements del
+# pipeline (Body() perdió el kwarg min_items en fastapi >=0.116):
+#   TypeError: Body() got an unexpected keyword argument 'min_items'
+# Con 3.9.1 el mismo import pasa (verificado en el mismo contenedor). Aquí no
+# hay server que negociar (ephemeral = client+server en el proceso), así que la
+# paridad estricta del otro taller no aplica. Si un alumno apunta este flow a
+# PREFECT_API_URL del server 3.6.29 del taller de Prefect, Prefect 3.x tolera
+# el desfase de minor; para el smoke del taller usad siempre ephemeral.
+RUN pip install --no-cache-dir -r requirements.txt \
+ && pip install --no-cache-dir "prefect==3.9.1"
+
+COPY src ./src
+COPY configs ./configs
+COPY estados-finalizados/prefect/flow.py ./flow.py
+
+CMD ["python", "flow.py"]

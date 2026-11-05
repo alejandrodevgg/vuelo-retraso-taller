@@ -1,0 +1,42 @@
+# compose.prefect.yaml — overlay SOLO para el stretch de Prefect (opcional)
+# Uso:
+#   docker compose -f docker-compose.yml -f estados-finalizados/prefect/compose.prefect.yaml \
+#     run --rm prefect-flow
+# Requiere mlflow arriba (y, si quieres verlo de punta a punta, datos/entrena
+# ya ejecutados al menos una vez: el flow los vuelve a ejecutar él).
+name: mlops-pipeline
+
+services:
+  prefect-flow:
+    build:
+      # context: "." resuelve contra la RAIZ del pipeline (el compose principal),
+      # no contra este overlay: los COPY del Dockerfile (src/, configs/,
+      # estados-finalizados/prefect/flow.py) están escritos contra esa raiz.
+      # El "../" original pedia materiales-alumno/estados-finalizados — lstat
+      # error real cazado en el smoke de 2026-11-02.
+      context: .
+      dockerfile: estados-finalizados/prefect/Dockerfile.prefect
+    profiles: ["prefect"]
+    environment:
+      MLFLOW_TRACKING_URI: ${MLFLOW_TRACKING_URI:-http://mlflow:5000}
+      # Prefect en modo ephemeral: sin server, sin DB externa, logs en stdout.
+      PREFECT_API_URL: ""
+    volumes:
+      - pipeline-data:/app/data/work
+      - pipeline-data:/app/models
+      - ./data/raw:/app/data/raw:ro
+    networks:
+      - app
+    depends_on:
+      mlflow:
+        condition: service_healthy
+
+# El overlay gasta el volumen compartido de jobs; hay que declararlo AQUI
+# porque la base v0.1 del alumno solo declara mlflow-data (sin esto, compose
+# falla con "undefined service volume" antes de arrancar — cazado ejecutando).
+volumes:
+  pipeline-data:
+
+networks:
+  app:
+    name: mlops-app

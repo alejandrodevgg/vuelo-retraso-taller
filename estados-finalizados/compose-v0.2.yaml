@@ -1,0 +1,67 @@
+# compose-v0.2.yaml — Sección s3 · + job de DATOS (run_processing + contract pandera)
+# ==================================================================================
+# Delta sobre v0.1: el servicio `datos`. Job de un solo dispar (profile "jobs":
+# no lo arranca `up`, lo lanzas tú con `run`). Sus salidas van a un VOLUMEN
+# NOMBRADO (pipeline-data) que compartirán entrena y api — versión 2026 del
+# "artifacts" que subía y bajaba el workflow del gist de CI.
+# El crudo entra por bind mount de SOLO LECTURA: un job nunca escribe sobre el
+# dataset original.
+name: mlops-pipeline
+
+x-job-build: &job-build
+  context: .
+  dockerfile: Dockerfile.job
+
+services:
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:v3.17.2
+    container_name: mlflow
+    command: >
+      mlflow server
+      --host 0.0.0.0
+      --port 5000
+      --backend-store-uri sqlite:////mlflow-data/mlflow.db
+      --artifacts-destination /mlflow-data/mlartifacts
+      --serve-artifacts
+    environment:
+      # MLflow 3.5+ valida la cabecera Host (protección anti DNS-rebinding):
+      # sin esto, los clientes DENTRO de la red docker (host 'mlflow:5000')
+      # reciben 403 "Invalid Host header". Aquí se declaran los hosts legítimos
+      # de esta red: el nombre del servicio, localhost para la UI del navegador
+      # y los rangos IP privados que usa docker por debajo.
+      MLFLOW_SERVER_ALLOWED_HOSTS: "localhost:*,127.0.0.1:*,mlflow,mlflow:*,0.0.0.0:*,10.*,172.*,192.168.*"
+    volumes:
+      - mlflow-data:/mlflow-data
+    ports:
+      - "5555:5000"
+    networks:
+      - app
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:5000/health', timeout=3).status == 200 else 1)\""]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  datos:
+    build: *job-build
+    profiles: ["jobs"]
+    environment:
+      # Default flights: la clase 2 es vuelos. house_data*.csv siguen en
+      # data/raw/ como datos históricos del taller viejo (y demo negativa).
+      RAW_FILE: ${RAW_FILE:-data/raw/flights.csv}
+    volumes:
+      - ./data/raw:/app/data/raw:ro
+      - pipeline-data:/app/data/work
+      - pipeline-data:/app/models
+    networks:
+      - app
+
+volumes:
+  mlflow-data:
+  pipeline-data:
+
+networks:
+  app:
+    name: mlops-app
+    driver: bridge

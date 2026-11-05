@@ -1,0 +1,11 @@
+model:
+  name: vuelo-retraso                # Model Registry name (registry URI: models:/vuelo-retraso@...)
+  experiment_name: flight-delay-prediction
+  target_variable: delayed_15min     # arrival delay > 15 min (BTS standard)
+split:
+  # Temporal split — the drift story of the course (see train_model.py header).
+  train_years: [2023, 2024]
+  val_year: 2024                     # in-year holdout: same era as fit
+  val_holdout_frac: 0.2
+  test_year: 2025                    # never fit on; the base rate rises alone
+random_state: 42

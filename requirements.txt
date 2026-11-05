@@ -1,0 +1,31 @@
+# requirements.txt — front Streamlit (streamlit_app/)
+# Pins coherentes con el requirements.txt del pipeline (fuente única de
+# versiones). El front NO sube versiones por su cuenta: mlflow/sklearn/xgboost
+# en el modo direct tienen que paridear con el artefacto registrado, o pyfunc
+# se queja (o peor: carga con avisos y sirves otra cosa).
+
+# --------------------------------------------- UI + cliente de la API (MODE=api)
+streamlit==1.66.1
+requests==2.32.3
+
+# --------------------------------------------- gráficas (ambos modos)
+plotly==7.1.0           # gauge + curva 24h; resuelto por uv en 2026-11-02
+
+# --------------------------------------------- MODELO EMBUTIDO (MODE=direct)
+# Solo se importan bajo MODE=direct (app pública sin API reachable): pesan en la
+# imagen pero no en el arranque del modo api. Pins calcados del pin del repo:
+#   mlflow-skinny: cliente pyfunc sin server ni UI — es lo que necesita
+#   load_model local; 3.17.2 == ghcr.io/mlflow/mlflow:v3.17.2 del compose
+#   (paridad cliente/servidor obligatoria, ver requirements del pipeline).
+#   sklearn/xgboost/numpy/pandas: el artefacto logged ES un Pipeline con estas
+#   librerías dentro; sin ellas pyfunc no deserializa. Versiones = las del tag
+#   del modelo registrado (scikit_learn 1.5.2, xgboost 1.7.6) y las del job.
+mlflow-skinny==3.17.2
+scikit-learn==1.5.2
+xgboost==1.7.6
+pandas==2.2.3
+numpy==1.26.4
+# pandera NO la usa el front: la importa el top-level de src/features/engineer.py
+# (el data contract) y ese modulo se deserializa al cargar el pickle. Sin este
+# pin, pyfunc muere con ModuleNotFoundError: caught en el smoke direct 2026-11-02.
+pandera==0.35.0

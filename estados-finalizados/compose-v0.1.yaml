@@ -1,0 +1,48 @@
+# compose-v0.1.yaml — Sección s2 · solo el MLflow Tracking Server
+# ==============================================================
+# El primer ladrillo: tracking + registry (mismo servidor). Flags de MLflow 3:
+#   --backend-store-uri sqlite:////mlflow-data/mlflow.db  -> metadata en volumen, no /tmp
+#   --artifacts-destination /mlflow-data/mlartifacts      -> artefactos en volumen
+#   --serve-artifacts                                     -> default en MLflow 3; explícito por docencia
+# El tag lleva "v" (ghcr.io/mlflow/mlflow:v3.17.2): sin la v el registry da 404.
+# Paridad de versiones: este servidor 3.17.2 == mlflow==3.17.2 del requirements del cliente.
+name: mlops-pipeline
+
+services:
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:v3.17.2
+    container_name: mlflow
+    command: >
+      mlflow server
+      --host 0.0.0.0
+      --port 5000
+      --backend-store-uri sqlite:////mlflow-data/mlflow.db
+      --artifacts-destination /mlflow-data/mlartifacts
+      --serve-artifacts
+    environment:
+      # MLflow 3.5+ valida la cabecera Host (protección anti DNS-rebinding):
+      # sin esto, los clientes DENTRO de la red docker (host 'mlflow:5000')
+      # reciben 403 "Invalid Host header". Aquí se declaran los hosts legítimos
+      # de esta red: el nombre del servicio, localhost para la UI del navegador
+      # y los rangos IP privados que usa docker por debajo.
+      MLFLOW_SERVER_ALLOWED_HOSTS: "localhost:*,127.0.0.1:*,mlflow,mlflow:*,0.0.0.0:*,10.*,172.*,192.168.*"
+    volumes:
+      - mlflow-data:/mlflow-data
+    ports:
+      - "5555:5000"
+    networks:
+      - app
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:5000/health', timeout=3).status == 200 else 1)\""]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+volumes:
+  mlflow-data:
+
+networks:
+  app:
+    name: mlops-app
+    driver: bridge

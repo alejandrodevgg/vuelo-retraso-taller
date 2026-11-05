@@ -1,0 +1,30 @@
+# Dockerfile.streamlit — consumer UI (talks to the API over the internal network)
+# Dual-mode (ver streamlit_app/README.md):
+#   MODE=api    -> llama a API_URL (el taller en compose)
+#   MODE=direct -> mlflow.pyfunc sobre MODEL_DIR (app pública; ver despliegue/README.md)
+FROM python:3.11-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    STREAMLIT_BROWSER_GATHER_USAGE_STATS=false
+
+WORKDIR /app
+
+COPY streamlit_app/requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# El .streamlit/config.toml (tema Inmune) viaja dentro de streamlit_app/:
+# Streamlit lo encuentra en /app/.streamlit porque WORKDIR es /app.
+COPY streamlit_app/ ./
+
+# MODELO EMBUTIDO (MODE=direct): el pickle del logged model referencia clases
+# PROPIAS (src.features.engineer.GroupCategories, src.models.proba.ProbaPredictor).
+# Sin este COPY + PYTHONPATH, pyfunc revienta al deserializar — el mismo gotcha
+# que el Dockerfile.api ya documenta. En MODE=api son ~90 KB inocuos.
+COPY src ./src
+ENV PYTHONPATH=/app
+
+EXPOSE 8501
+
+CMD ["streamlit", "run", "app.py", "--server.port=8501", "--server.address=0.0.0.0", "--server.headless=true"]

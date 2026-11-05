@@ -1,0 +1,16 @@
+# .streamlit/config.toml — tema Inmune del front del taller
+# Hex extraídos de assets/brand/paleta-inmune.css (raíz del repo). Prohibido
+# inventar colores fuera de los tokens --inm-*.
+# Tipografías: las por defecto de Streamlit — esta app se proyecta en aula SIN
+# internet; nada de fuentes web.
+[theme]
+base = "dark"
+backgroundColor = "#0e2a33"   # --inm-tinta (noche oscurecido)
+primaryColor = "#0898ab"      # --inm-teal  (botones, selección, focus)
+textColor = "#eafffb"         # --inm-espuma (claro sobre tinta)
+
+[browser]
+gatherUsageStats = false
+
+[client]
+toolbarMode = "minimal"
