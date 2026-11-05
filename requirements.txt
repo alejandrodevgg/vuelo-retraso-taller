@@ -1,31 +1,53 @@
-# requirements.txt — front Streamlit (streamlit_app/)
-# Pins coherentes con el requirements.txt del pipeline (fuente única de
-# versiones). El front NO sube versiones por su cuenta: mlflow/sklearn/xgboost
-# en el modo direct tienen que paridear con el artefacto registrado, o pyfunc
-# se queja (o peor: carga con avisos y sirves otra cosa).
+# requirements.txt — pipeline (API + jobs + entrenamiento)
+# Fuente única de versiones del taller: el front (streamlit_app/requirements.txt)
+# copia de aquí sus pins compartidos y NO los sube por su cuenta.
+#
+# Este fichero lo consumen Dockerfile.api (uvicorn main:app), Dockerfile.job
+# (python -m src.run_pipeline / src.models.train_model) y el stretch
+# (Dockerfile.prefect, que añade prefect==3.9.1 encima a propósito).
+#
+# FUERA de este fichero a propósito —lo declaran el CI (s8) y el paso 0 del
+# README—: las deps del regenerador de datos crudos (pyarrow>=19, fsspec,
+# aiohttp) viven en `uv run --with ...` y en el paso extra del workflow, porque
+# el crudo se genera una vez por ronda, no en cada imagen. evidently==0.7.23
+# (s9) tampoco va aquí: se instala ad hoc en el contenedor desechable.
+#
+# Reconstruido el 2026-11-05 tras corromperse el fichero: los pines sin
+# evidencia literal en el repo van marcados «reconstruido» en su línea.
 
-# --------------------------------------------- UI + cliente de la API (MODE=api)
-streamlit==1.66.1
-requests==2.32.3
+# --------------------------------------------- API de inferencia (Dockerfile.api)
+# Pin con evidencia literal: lo citan Dockerfile.prefect y su HOWTO («revienta
+# contra el fastapi==0.162.0 del requirements del pipeline»).
+fastapi==0.162.0
+uvicorn==0.34.0                            # reconstruido: sin evidencia de pin original; ejecuta el CMD del api
+pydantic==2.11.7                           # reconstruido: sin evidencia de pin original; lo importa src/api/schemas.py (viaja también con fastapi, se fija por import directo)
 
-# --------------------------------------------- gráficas (ambos modos)
-plotly==7.1.0           # gauge + curva 24h; resuelto por uv en 2026-11-02
-
-# --------------------------------------------- MODELO EMBUTIDO (MODE=direct)
-# Solo se importan bajo MODE=direct (app pública sin API reachable): pesan en la
-# imagen pero no en el arranque del modo api. Pins calcados del pin del repo:
-#   mlflow-skinny: cliente pyfunc sin server ni UI — es lo que necesita
-#   load_model local; 3.17.2 == ghcr.io/mlflow/mlflow:v3.17.2 del compose
-#   (paridad cliente/servidor obligatoria, ver requirements del pipeline).
-#   sklearn/xgboost/numpy/pandas: el artefacto logged ES un Pipeline con estas
-#   librerías dentro; sin ellas pyfunc no deserializa. Versiones = las del tag
-#   del modelo registrado (scikit_learn 1.5.2, xgboost 1.7.6) y las del job.
-mlflow-skinny==3.17.2
+# --------------------------------------------- núcleo ML (entrena + sirve)
+# mlflow COMPLETO, no skinny: el servidor del compose es
+# ghcr.io/mlflow/mlflow:v3.17.2 y el cliente tiene que paridear
+# («3.17.2 == mlflow==3.17.2 del requirements del cliente», compose-v0.1; lo
+# repiten los dos mlops-ci.yml). Skinny solo en el front.
+mlflow==3.17.2
+# Pins compartidos con el front, idénticos a streamlit_app/requirements.txt
+# (fuente única de versiones). README: «XGBoost va clavado a 1.7.6 en todos
+# los sitios a propósito».
 scikit-learn==1.5.2
 xgboost==1.7.6
-pandas==2.2.3
 numpy==1.26.4
-# pandera NO la usa el front: la importa el top-level de src/features/engineer.py
-# (el data contract) y ese modulo se deserializa al cargar el pickle. Sin este
-# pin, pyfunc muere con ModuleNotFoundError: caught en el smoke direct 2026-11-02.
-pandera==0.35.0
+pandas==2.2.3
+pandera==0.35.0                            # el contract de src/features/engineer.py
+joblib==1.5.2                              # reconstruido: sin evidencia de pin original; lo importan train_model.py y el pkl-mode (inference.py)
+
+# --------------------------------------------- datos y config
+PyYAML==6.0.2                              # reconstruido: sin evidencia de pin original; train_model.py lee configs/model_config.yaml con `import yaml`
+
+# --------------------------------------------- observabilidad (métricas s6 + OTel s9)
+# main.py expone /metrics con el instrumentator (lo scrapea Prometheus en s9).
+prometheus-fastapi-instrumentator==7.1.0   # reconstruido: sin evidencia de pin original
+# s9 (overlay v0.7-observability): el comando del api pasa a
+# `opentelemetry-instrument uvicorn ...`, así que la CLI (distro) tiene que
+# vivir en la imagen; «el exporter proto-http va en requirements.txt» es
+# evidencia literal del propio v0.7. La instrumentación de fastapi la resuelve
+# `opentelemetry-bootstrap` durante el lab, sin pin propio.
+opentelemetry-distro==1.34.0                       # reconstruido: sin evidencia de pin original
+opentelemetry-exporter-otlp-proto-http==1.34.0     # reconstruido: sin evidencia de pin original
