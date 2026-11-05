@@ -1,0 +1,198 @@
+# mlops-ci.yml — Sección s8 · el pipeline del gist, portado y modernizado
+# =========================================================================
+# Port de `.github/workflows/mlops-pipeline.yml` (gist initcron/31835f56…, el
+# que enlazaba el curso Docker-for-AI-ML). Mismos 3 jobs encadenados con needs:
+#
+#   data-processing → model-training → build-and-publish
+#
+# Modernizaciones sobre el original:
+#   * actions pinneadas por SHA (era checkout@v2 / setup-python@v2):
+#     la disciplina que ya practica el trackme del taller de GitHub Actions.
+#   * imagen de MLflow con tag 'v' y versión fija: v3.17.2, jamás :latest
+#     (paridad con el cliente mlflow==3.17.2 del requirements).
+#   * empuje a GHCR con GITHUB_TOKEN (el gist empujaba a Docker Hub con un PAT
+#     en vars/secrets; aquí no hay que dar de alta nada si el repo es tuyo).
+#   * smoke test DOBLE: /health y /predict antes de empujar la imagen.
+#   * GATE de métrica (nuevo en la versión vuelos): ni el gist ni la versión
+#     casa tenían uno — entrenar y publicar sin comprobar la calidad es un CI
+#     que solo comprueba que no hay excepciones. Ver el paso «Quality gate».
+#
+# Delta de datos: el crudo de vuelos (data/raw/flights.csv, ~22 MB) NO va en
+# git — es un artefacto generado. El job de datos lo REGENERA primero con el
+# script versionado (determinista, seed 42, ~1 min de streaming desde Hugging
+# Face). Eso es la lección M2 en carne viva: un pipeline de CI reproduce hasta
+# los datos, no solo el modelo.
+#
+# Honestidad didáctica: el MLflow de este job es EFÍMERO (contenedor que muere
+# al acabar el job). Registra el modelo para probar el flujo, pero en un setup
+# real MLflow vive en un servidor persistente. Ahí tenéis la demo de por qué.
+name: MLOps Pipeline
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_all:
+        description: "Run all jobs"
+        required: false
+        default: "true"
+
+jobs:
+  data-processing:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Set up Python
+        uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b # v5.3.0
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          # deps del sampler (viven fuera del pipeline a propósito: el crudo
+          # se genera una vez por ronda, no en cada imagen):
+          pip install "pyarrow>=19" fsspec aiohttp
+      - name: Regenerate raw sample (deterministic, seed 42)
+        run: python scripts/make_flights_sample.py
+      - name: Process data (limpieza + contract pandera)
+        run: |
+          python -m src.data.run_processing --input data/raw/flights.csv --output data/work/cleaned_flights.csv
+          python -m src.features.engineer --input data/work/cleaned_flights.csv --output data/work/featured_flights.csv
+      - name: Upload featured data
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
+        with:
+          name: processed-data
+          path: data/work/featured_flights.csv
+
+  model-training:
+    needs: data-processing
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Set up Python
+        uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b # v5.3.0
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: Download featured data
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
+        with:
+          name: processed-data
+          path: data/work/
+      - name: Set up ephemeral MLflow
+        # Tag con "v" y versión fija. El sqlite del runner muere con el job.
+        run: |
+          docker run -d -p 5000:5000 --name mlflow-server \
+            ghcr.io/mlflow/mlflow:v3.17.2 \
+            mlflow server --host 0.0.0.0 --port 5000 \
+              --backend-store-uri sqlite:////tmp/mlflow.db \
+              --artifacts-destination /tmp/mlartifacts --serve-artifacts
+      - name: Wait for MLflow to start
+        run: |
+          for _ in {1..12}; do
+            curl -sf http://localhost:5000/health && break
+            sleep 5
+          done
+          # si el bucle agota los intentos sin break, esto falla el job ya
+          curl -sf http://localhost:5000/health > /dev/null
+      - name: Train model (loguea runs + registra el mejor)
+        run: |
+          mkdir -p models
+          python src/models/train_model.py \
+            --config configs/model_config.yaml \
+            --data data/work/featured_flights.csv \
+            --models-dir models \
+            --metrics-out models/metrics.json \
+            --mlflow-tracking-uri http://localhost:5000 \
+            --register
+      - name: Quality gate — el modelo se gana el push
+        # Umbral FIJADO POR EJECUCIÓN REAL (smoke docker 2026-11-02, ver
+        # docs/SMOKE-FLIGHTS.md y docs/NUMEROS-VUELOS.md «Modelo»): XGBoost
+        # gana con test_roc_auc = 0.7167 en el test temporal 2025 (LR: 0.7100).
+        # El gate se pone 0.0667 por debajo (0.65): seed 42 y pins congelados
+        # hacen el run reproducible al dígito EN LA MISMA ARQUITECTURA, pero el
+        # runner de CI es x86 y el aula arm64 — los decimales 3-4 de XGBoost
+        # pueden bailar entre plataformas. 0.65 deja pasar ese baile y sigue
+        # matando cualquier run con bug de verdad (o un contract que dejó pasar
+        # otro mundo). Ambos candidatos de la ronda medida pasan el gate; el
+        # gate mide SALUD del pipeline, no el winner.
+        env:
+          ROC_AUC_MIN: "0.65"
+        run: |
+          python - <<'PY'
+          import json, os, sys
+
+          with open("models/metrics.json") as fh:
+              m = json.load(fh)
+          gate = float(os.environ["ROC_AUC_MIN"])
+          best, auc = m["best"], m["models"][m["best"]]["test_roc_auc"]
+          print(f"best={best} test_roc_auc={auc:.4f} gate={gate}")
+          if auc < gate:
+              sys.exit(f"QUALITY GATE FAIL: test_roc_auc {auc:.4f} < {gate}")
+          print("Quality gate OK")
+          PY
+      - name: Upload trained model
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
+        with:
+          name: trained-model
+          path: models/
+      - name: Clean up MLflow
+        if: always()
+        run: |
+          docker stop mlflow-server || true
+          docker rm mlflow-server || true
+
+  build-and-publish:
+    needs: model-training
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Download trained model
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
+        with:
+          name: trained-model
+          path: models/
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@6524bf65af31da8d45b59e8c27de4bd072b392f5 # v3.8.0
+      - name: Build and SMOKE-TEST the Docker image
+        run: |
+          docker build -t flight-delay-model:${{ github.sha }} -f Dockerfile.api .
+          # pkl-mode: la imagen lleva el models/ del artifact; INFERENCE_MODULE
+          # default es `inference` (el starter lee el pkl; ver Dockerfile.api).
+          docker run -d -p 8000:8000 --name test-api flight-delay-model:${{ github.sha }}
+          for _ in {1..10}; do
+            curl -sf http://localhost:8000/health && break
+            sleep 3
+          done
+          curl -sf http://localhost:8000/health
+          echo "::notice::smoke /health OK"
+          curl -sf -X POST http://localhost:8000/predict \
+            -H 'Content-Type: application/json' \
+            -d '{"dep_hour":18,"dep_weekday":4,"adep":"LEMD","ades":"LEBL","icao_operator":"RYR"}'
+          echo "::notice::smoke /predict OK"
+      - name: Clean up Test Container
+        run: |
+          docker stop test-api || true
+          docker rm test-api || true
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567 # v3.3.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Push Docker image to GHCR
+        run: |
+          IMAGE=ghcr.io/${{ github.repository_owner }}/flight-delay-api
+          docker tag flight-delay-model:${{ github.sha }} $IMAGE:${{ github.sha }}
+          docker tag flight-delay-model:${{ github.sha }} $IMAGE:latest
+          docker push $IMAGE:${{ github.sha }}
+          docker push $IMAGE:latest
