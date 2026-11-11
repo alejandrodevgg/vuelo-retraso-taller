@@ -29,6 +29,12 @@
 name: MLOps Pipeline
 
 on:
+  # Antes solo existía workflow_dispatch: el pipeline NUNCA corría solo tras un
+  # push (y el único run manual murió en el paso del sampler, ver abajo). Se
+  # activan también push a main y PR, que es lo que se enseña en s8.
+  push:
+    branches: [main]
+  pull_request:
   workflow_dispatch:
     inputs:
       run_all:
@@ -52,7 +58,10 @@ jobs:
           pip install -r requirements.txt
           # deps del sampler (viven fuera del pipeline a propósito: el crudo
           # se genera una vez por ronda, no en cada imagen):
-          pip install "pyarrow>=19" fsspec aiohttp
+          # pyarrow>=19 sin cota superior resolvió en 2026 a una build que
+          # exige NumPy>=2 (ImportError real en el run 42065962092) contra
+          # numpy==1.26.4 del pipeline; 19.0.1 es la última compatible.
+          pip install "pyarrow==19.0.1" fsspec aiohttp
       - name: Regenerate raw sample (deterministic, seed 42)
         run: python scripts/make_flights_sample.py
       - name: Process data (limpieza + contract pandera)
