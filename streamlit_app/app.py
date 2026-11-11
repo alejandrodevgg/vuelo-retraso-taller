@@ -1,15 +1,18 @@
 # streamlit_app/app.py — front-end del taller: P(retraso de llegada > 15 min)
 # =============================================================================
 # Dos modos, la MISMA pantalla (doc en streamlit_app/README.md):
-#   MODE=api     (default) — habla con la API FastAPI vía API_URL: /predict,
+#   MODE=direct            — DEFAULT (Streamlit Cloud no puede inyectar
+#                            variables de entorno). Carga el artefacto con
+#                            mlflow.pyfunc.load_model sobre MODEL_DIR (modelo
+#                            empaquetado con su prepor; NO levanta ni llama a
+#                            ninguna API). Pensado para la app pública, donde
+#                            la API del portátil del docente no es reachable:
+#                            ver ../../../spaces/.
+#   MODE=api               — habla con la API FastAPI vía API_URL: /predict,
 #                            /batch-predict, /health y /metrics. Es el modo del
-#                            taller en compose (http://api:8000 por nombre de
-#                            servicio, nunca localhost).
-#   MODE=direct            — carga el artefacto con mlflow.pyfunc.load_model
-#                            sobre MODEL_DIR (modelo empaquetado con su
-#                            prepor; NO levanta ni llama a ninguna API). Pensado
-#                            para la app pública, donde la API del portátil
-#                            del docente no es reachable: ver ../../../spaces/.
+#                            taller en compose (MODE=api explícito, con
+#                            http://api:8000 por nombre de servicio, nunca
+#                            localhost).
 #
 # Layout 2026-11-05: SIN barra lateral — panel de control arriba, resultado
 # grande centrado debajo, curva 24 h después y la evidencia de servicio
@@ -30,6 +33,7 @@ import os
 import re
 import socket
 from datetime import datetime, timezone
+from pathlib import Path
 
 import pandas as pd
 import plotly.graph_objects as go
@@ -90,9 +94,12 @@ UMBRAL = 0.5                            # class_threshold del contrato
 
 st.set_page_config(page_title="Retrasos aéreos · MLOps", layout="wide")
 
-MODE = os.getenv("MODE", "api").strip().lower()
+# Streamlit Cloud NO puede inyectar variables de entorno: los defaults son los
+# de la app pública (direct sobre el artefacto empaquetado en el repo). El
+# taller en compose define MODE=api explícitamente en el servicio front.
+MODE = os.getenv("MODE", "direct").strip().lower()
 API_URL = os.getenv("API_URL", "http://api:8000").rstrip("/")
-MODEL_DIR = os.getenv("MODEL_DIR", "")
+MODEL_DIR = os.getenv("MODEL_DIR") or str(Path(__file__).resolve().parent / "artefacto")
 
 st.markdown("""
 <style>

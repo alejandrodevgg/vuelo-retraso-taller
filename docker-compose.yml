@@ -114,6 +114,8 @@ services:
       dockerfile: Dockerfile.streamlit
     container_name: vuelo-retraso-front
     environment:
+      MODE: api                             # los defaults de app.py son ya los de
+      # Streamlit Cloud (direct); el lab de compose necesita hablar con la API.
       API_URL: http://api:8000           # por el nombre de servicio: NO localhost
     ports:
       - "8501:8501"
