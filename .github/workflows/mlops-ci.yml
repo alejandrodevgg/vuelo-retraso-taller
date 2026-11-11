@@ -200,7 +200,14 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Push Docker image to GHCR
         run: |
-          IMAGE=ghcr.io/${{ github.repository_owner }}/flight-delay-api
+          # ghcr.io/<owner>/flight-delay-api NO: ese paquete lo creo primero el
+          # repo demo del taller y GHCR liga la escritura al repo que lo creo
+          # (permission_denied: write_package en el run 42985820981). Con
+          # github.repository el paquete nace ligado a ESTE repo y el
+          # GITHUB_TOKEN con packages:write basta. Ojo quirk: el PRIMER push
+          # puede fallar igual hasta que GHCR propaga el paquete — un rerun lo
+          # resuelve (documentado en MANIFEST-CI del taller).
+          IMAGE=ghcr.io/${{ github.repository }}
           docker tag flight-delay-model:${{ github.sha }} $IMAGE:${{ github.sha }}
           docker tag flight-delay-model:${{ github.sha }} $IMAGE:latest
           docker push $IMAGE:${{ github.sha }}
